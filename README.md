@@ -31,7 +31,7 @@ vexo.capture("user@example.com", "purchase_completed", {"amount": 49.9, "currenc
 vexo.shutdown()
 ```
 
-`capture()` and `identify()` only queue the message, so they never block a request. The client registers `shutdown()` with `atexit`; if your process is killed without a normal exit (for example, `SIGKILL`), queued messages are lost. `shutdown()` gives up after `shutdown_timeout` seconds and reports what was still queued to `on_error`.
+`capture()` and `identify()` only queue the message, so they never block a request. The client registers `shutdown()` with `atexit`; if your process is killed without a normal exit (for example, `SIGKILL`), queued messages are lost. `shutdown()` gives up after `shutdown_timeout` seconds: it aborts the request in flight and any retry wait, and reports what wasn't sent to `on_error`.
 
 Copy your app's API key from the app's [settings](https://docs.vexo.co/settings/app-settings/app-general-information) in the Vexo dashboard. It's the same key your app SDK uses, so it isn't a secret; see [Security](https://docs.vexo.co/server-side/capture#security).
 

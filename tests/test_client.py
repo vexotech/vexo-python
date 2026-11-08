@@ -15,8 +15,9 @@ from vexo import Vexo
 class FakeApi:
     """A local API that records each batch request and answers with the next scripted response."""
 
-    def __init__(self, responses=None):
+    def __init__(self, responses=None, delay=0):
         self.requests = []
+        self.delay = delay
         self.responses = list(responses or [])
         api = self
 
@@ -25,6 +26,7 @@ class FakeApi:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 api.requests.append({"path": self.path, "headers": dict(self.headers), "body": body})
                 status, headers, payload = api.responses.pop(0) if api.responses else (200, {}, None)
+                time.sleep(api.delay)
                 if payload is None:
                     payload = {"success": True, "code": 200, "data": {"accepted": len(body["batch"]), "dropped": []}}
                 data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
@@ -49,8 +51,8 @@ class FakeApi:
 
 
 class VexoTest(unittest.TestCase):
-    def client(self, responses=None, **options):
-        self.api = FakeApi(responses)
+    def client(self, responses=None, delay=0, **options):
+        self.api = FakeApi(responses, delay)
         self.addCleanup(self.api.close)
         self.errors = []
         options.setdefault("flush_interval", 60)
@@ -233,6 +235,30 @@ class VexoTest(unittest.TestCase):
 
         self.assertLess(time.monotonic() - started, 2.5)
         self.assertTrue(any("deadline" in str(e) for e in self.errors))
+
+    def test_shutdown_aborts_the_workers_request_in_flight_at_the_deadline(self):
+        vexo = self.client(delay=5, flush_at=1, timeout=30, shutdown_timeout=0.5)
+        vexo.capture("u", "a")
+        self.wait_for_requests(1)  # the worker's request is in flight
+
+        started = time.monotonic()
+        vexo.shutdown()
+
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual([m["event"] for e in self.errors for m in getattr(e, "batch", [])], ["a"])
+
+    def test_shutdown_ends_the_workers_backoff_wait_at_the_deadline(self):
+        vexo = self.client([(503, {"Retry-After": "30"}, {"success": False})], flush_at=1, shutdown_timeout=0.5)
+        vexo.capture("u", "a")
+        self.wait_for_requests(1)
+        time.sleep(0.1)  # the worker is in its 30 s Retry-After wait
+
+        started = time.monotonic()
+        vexo.shutdown()
+
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(len(self.api.requests), 1)
+        self.assertEqual([m["event"] for e in self.errors for m in getattr(e, "batch", [])], ["a"])
 
     def test_drops_a_message_with_nan_or_infinity_at_enqueue(self):
         vexo = self.client()

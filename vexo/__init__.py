@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import random
+import socket
 import threading
 import time
 import urllib.error
@@ -21,6 +22,8 @@ MAX_BATCH_SIZE = 500
 MAX_BODY_BYTES = 5 * 1024 * 1024
 BATCH_ENVELOPE_BYTES = len('{"batch":[]}')
 MAX_BACKOFF_SECONDS = 30.0
+# After aborting the worker's request at the shutdown deadline, how long shutdown() waits for it to report the batch.
+ABORT_GRACE_SECONDS = 0.5
 
 log = logging.getLogger("vexo")
 
@@ -52,6 +55,9 @@ class Vexo:
         # Set by a batch that used up its retries: later batches get one attempt until a request succeeds.
         self._circuit_open = False
         self._deadline = None
+        self._connection = None
+        # Hands each connection to the client, so that shutdown() can abort the request in flight.
+        self._opener = urllib.request.build_opener(_TrackedHTTPHandler(self._track), _TrackedHTTPSHandler(self._track))
         self._reset_state()
         atexit.register(self.shutdown)
         if hasattr(os, "register_at_fork"):
@@ -99,6 +105,10 @@ class Vexo:
         if self._worker.is_alive() and threading.current_thread() is not self._worker:
             self._worker.join(self._remaining())
         if not self._send_lock.acquire(timeout=self._remaining()):
+            # The worker is still sending at the deadline: end its backoff wait or abort its request, so it reports
+            # that batch, then drop what is still queued.
+            self._abort()
+            self._worker.join(ABORT_GRACE_SECONDS)
             self._drop_queue()
             return
         try:
@@ -111,6 +121,7 @@ class Vexo:
         self._lock = threading.Lock()
         self._send_lock = threading.Lock()
         self._wake = threading.Event()
+        self._interrupt = threading.Event()
         self._worker = threading.Thread(target=self._run, name="vexo-flush", daemon=True)
         if not self._closed:
             self._worker.start()
@@ -189,6 +200,8 @@ class Vexo:
         max_retries = 0 if self._circuit_open else self.max_retries
         attempt = 0
         while True:
+            if attempt and self._remaining() <= 0:
+                raise VexoError("vexo: shutdown deadline reached before the batch was sent")
             try:
                 result = self._post(batch)
             except urllib.error.HTTPError as error:
@@ -227,7 +240,7 @@ class Vexo:
             "User-Agent": "vexo-python/" + __version__,
         })
         timeout = max(0.001, min(self.timeout, self._remaining()))
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with self._opener.open(request, timeout=timeout) as response:
             return _response_data(response.read())
 
     def _report(self, batch, results, what):
@@ -241,7 +254,43 @@ class Vexo:
         return float("inf") if self._deadline is None else max(0.0, self._deadline - time.monotonic())
 
     def _sleep(self, seconds):
-        time.sleep(min(seconds, self._remaining()))
+        self._interrupt.wait(min(seconds, self._remaining()))
+
+    def _track(self, connection):
+        self._connection = connection
+
+    def _abort(self):
+        """End the worker's backoff wait and abort its request in flight."""
+        self._interrupt.set()
+        sock = self._connection and self._connection.sock
+        if sock:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+
+class _TrackConnections:
+    """A urllib handler mixin that passes each HTTP connection it opens to `track`."""
+
+    def __init__(self, track):
+        super().__init__()
+        self._track = track
+
+    def do_open(self, http_class, request, **kwargs):
+        def connection(*args, **connection_kwargs):
+            opened = http_class(*args, **connection_kwargs)
+            self._track(opened)
+            return opened
+        return super().do_open(connection, request, **kwargs)
+
+
+class _TrackedHTTPHandler(_TrackConnections, urllib.request.HTTPHandler):
+    pass
+
+
+class _TrackedHTTPSHandler(_TrackConnections, urllib.request.HTTPSHandler):
+    pass
 
 
 def _timestamp(timestamp):
