@@ -35,6 +35,24 @@ vexo.shutdown()
 
 Copy your app's API key from the app's [settings](https://docs.vexo.co/settings/app-settings/app-general-information) in the Vexo dashboard. It's the same key your app SDK uses, so it isn't a secret; see [Security](https://docs.vexo.co/server-side/capture#security).
 
+## Serverless functions
+
+AWS Lambda (like Google Cloud Functions and Azure Functions) freezes your process between invocations and can end it without running `atexit`, so the background thread can't be relied on to send. Create the client once, outside the handler, and call `flush()` before the handler returns:
+
+```python
+import os
+from vexo import Vexo
+
+vexo = Vexo(os.environ["VEXO_API_KEY"], max_retries=1, timeout=3.0)
+
+def handler(event, context):
+    vexo.capture(event["userId"], "order_placed", {"total": event["total"]})
+    vexo.flush()  # Send now: Lambda freezes the process once the handler returns.
+    return {"statusCode": 200}
+```
+
+`flush()` blocks while it sends and retries, so keep `max_retries` and `timeout` small enough to fit your function's timeout. Don't call `shutdown()` in the handler: the client stops accepting messages after it, and the next invocation reuses the same client.
+
 ## API
 
 ### `Vexo(api_key, **options)`
