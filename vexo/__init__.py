@@ -300,14 +300,17 @@ def _timestamp(timestamp):
     if timestamp is None:
         return int(time.time() * 1000)
     if isinstance(timestamp, datetime):
-        # A naive datetime is taken as UTC.
-        aware = timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=timezone.utc)
-        return int(aware.timestamp() * 1000)
+        return int(_utc(timestamp).timestamp() * 1000)
     if isinstance(timestamp, date):
         return int(datetime(timestamp.year, timestamp.month, timestamp.day, tzinfo=timezone.utc).timestamp() * 1000)
     if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
         return int(timestamp)
     return timestamp
+
+
+def _utc(value):
+    """A datetime in UTC; a naive one is read as UTC (SPEC.md M5)."""
+    return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 def _response_data(body):
