@@ -44,6 +44,8 @@ def main():
             if step.get("poison"):
                 properties = dict(properties or {})
                 properties["poison"] = properties  # a circular reference: json.dumps refuses it
+            if step.get("nan"):
+                properties = dict(properties or {}, nan=float("nan"))
             timestamp = datetime.fromisoformat(step["at"].replace("Z", "+00:00")) if "at" in step else step.get("timestamp")
             kwargs = {"message_id": step["messageId"]} if "messageId" in step else {}
             vexo.capture(step["distinctId"], step["event"], properties, timestamp=timestamp, **kwargs)
