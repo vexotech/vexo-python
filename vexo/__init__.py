@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 import uuid
 from datetime import date, datetime, timezone
+from decimal import Decimal
 
 __all__ = ["Vexo", "VexoError"]
 __version__ = "0.1.0"
@@ -132,9 +133,9 @@ class Vexo:
             return
         message["messageId"] = str(message_id or uuid.uuid4())
         try:
-            # default=str sends Decimal, UUID, date and similar values as strings. allow_nan=False: the API rejects
-            # NaN and Infinity, so such a message is dropped here instead of failing its whole batch with a 400.
-            body = json.dumps(message, default=str, separators=(",", ":"), allow_nan=False)
+            # allow_nan=False: the API rejects NaN and Infinity, so such a message is dropped here instead of failing
+            # its whole batch with a 400.
+            body = json.dumps(message, default=_json_value, separators=(",", ":"), allow_nan=False)
         except (TypeError, ValueError) as error:
             self.on_error(VexoError("vexo: message dropped, it can't be sent as JSON: %s" % error))
             return
@@ -311,6 +312,21 @@ def _timestamp(timestamp):
 def _utc(value):
     """A datetime in UTC; a naive one is read as UTC (SPEC.md M5)."""
     return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _json_value(value):
+    """The JSON form of a value json.dumps can't encode, the same in every Vexo SDK (SPEC.md M11).
+
+    A datetime becomes "2026-11-07T12:00:00.000Z", a Decimal plain decimal notation with all its digits, and anything
+    else (a date, a UUID) str(value).
+    """
+    if isinstance(value, datetime):
+        return _utc(value).replace(tzinfo=None).isoformat(timespec="milliseconds") + "Z"
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("%s can't be sent as a JSON number" % value)
+        return format(value, "f")
+    return str(value)
 
 
 def _response_data(body):

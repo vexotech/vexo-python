@@ -88,7 +88,7 @@ Stops the background thread and sends everything queued, for up to `shutdown_tim
 
 The client never raises from `capture()` or `identify()`. Failures go to `on_error`:
 
-- Values that JSON can't encode, such as `Decimal`, `UUID`, or `datetime` properties, are sent as strings. A message that still can't be serialized (for example, a circular reference, or a `NaN` or infinite float, which the API rejects) or that is over 5 MB is dropped when you queue it; the rest of the queue is unaffected.
+- Values that JSON can't encode are sent as strings, in the form every Vexo SDK uses: a `datetime` as an ISO 8601 string in UTC, such as `2026-11-07T12:00:00.000Z` (a naive one is read as UTC), a `date` as `2026-11-07`, a `Decimal` in plain decimal notation with all its digits (`"0.00000015"`, never `"1.5E-7"`), and a `UUID` as `str()` gives it. A message that still can't be serialized (for example, a circular reference, or a `NaN` or infinite float or `Decimal`, which the API rejects) or that is over 5 MB is dropped when you queue it; the rest of the queue is unaffected.
 - A batch that still fails after the retries, or that the API rejects with a `4xx`, arrives as an exception with `batch` (the messages it held); a `VexoError` also carries `status`. After that, the next batches get a single attempt until a request succeeds, so an unreachable API doesn't hold up your process.
 - A message the API dropped (for example, properties over 64 KB) arrives as a `VexoError` with `dropped`, a list of `{"message", "reason"}`. Messages the API reports as `failed` are retried, and reported the same way if they still fail.
 - Messages still queued at the shutdown deadline arrive as one `VexoError` with `batch`.

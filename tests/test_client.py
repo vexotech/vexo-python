@@ -5,7 +5,8 @@ import threading
 import time
 import unittest
 import warnings
-from datetime import datetime
+import uuid
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -187,9 +188,29 @@ class VexoTest(unittest.TestCase):
 
     def test_sends_values_json_cannot_encode_as_strings(self):
         vexo = self.client()
-        vexo.capture("u", "priced", {"amount": Decimal("9.90"), "at": datetime(2026, 1, 2)})
+        paris = timezone(timedelta(hours=1))
+        vexo.capture("u", "priced", {
+            "amount": Decimal("9.90"),
+            "tiny": Decimal("1.5E-7"),
+            "big": Decimal("1E+3"),
+            "naive": datetime(2026, 1, 2),
+            "aware": [datetime(2026, 11, 7, 13, 0, 0, 123456, tzinfo=paris)],
+            "day": date(2026, 11, 7),
+            "id": uuid.UUID("5b0c8f0e-6d1e-4f62-9d55-3f1f0f6a2b71"),
+            "text": "ok\ud800",
+        })
         vexo.flush()
-        self.assertEqual(self.api.requests[0]["body"]["batch"][0]["properties"], {"amount": "9.90", "at": "2026-01-02 00:00:00"})
+        self.assertEqual(self.api.requests[0]["body"]["batch"][0]["properties"], {
+            "amount": "9.90",
+            "tiny": "0.00000015",
+            "big": "1000",
+            "naive": "2026-01-02T00:00:00.000Z",
+            "aware": ["2026-11-07T12:00:00.123Z"],
+            "day": "2026-11-07",
+            "id": "5b0c8f0e-6d1e-4f62-9d55-3f1f0f6a2b71",
+            "text": "ok\ud800",
+        })
+        self.assertEqual(self.errors, [])
 
     def test_drops_only_the_message_that_cannot_be_serialized(self):
         vexo = self.client()
@@ -272,11 +293,13 @@ class VexoTest(unittest.TestCase):
         vexo = self.client()
         vexo.capture("u", "nan", {"x": float("nan")})
         vexo.capture("u", "inf", {"x": float("inf")})
+        vexo.capture("u", "decimal_nan", {"x": Decimal("NaN")})
+        vexo.capture("u", "decimal_inf", {"x": [Decimal("-Infinity")]})
         vexo.capture("u", "ok", {"x": 1.5})
         vexo.flush()
 
         self.assertEqual([m["event"] for m in self.api.requests[0]["body"]["batch"]], ["ok"])
-        self.assertEqual(len(self.errors), 2)
+        self.assertEqual(len(self.errors), 4)
 
     @unittest.skipUnless(hasattr(os, "fork"), "needs fork")
     def test_a_forked_child_sends_from_its_own_thread(self):
