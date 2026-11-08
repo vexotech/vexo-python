@@ -121,8 +121,9 @@ class Vexo:
             return
         message["messageId"] = str(message_id or uuid.uuid4())
         try:
-            # default=str sends Decimal, UUID, date and similar values as strings.
-            body = json.dumps(message, default=str, separators=(",", ":"))
+            # default=str sends Decimal, UUID, date and similar values as strings. allow_nan=False: the API rejects
+            # NaN and Infinity, so such a message is dropped here instead of failing its whole batch with a 400.
+            body = json.dumps(message, default=str, separators=(",", ":"), allow_nan=False)
         except (TypeError, ValueError) as error:
             self.on_error(VexoError("vexo: message dropped, it can't be sent as JSON: %s" % error))
             return

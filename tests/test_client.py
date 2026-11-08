@@ -234,6 +234,16 @@ class VexoTest(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 2.5)
         self.assertTrue(any("deadline" in str(e) for e in self.errors))
 
+    def test_drops_a_message_with_nan_or_infinity_at_enqueue(self):
+        vexo = self.client()
+        vexo.capture("u", "nan", {"x": float("nan")})
+        vexo.capture("u", "inf", {"x": float("inf")})
+        vexo.capture("u", "ok", {"x": 1.5})
+        vexo.flush()
+
+        self.assertEqual([m["event"] for m in self.api.requests[0]["body"]["batch"]], ["ok"])
+        self.assertEqual(len(self.errors), 2)
+
     @unittest.skipUnless(hasattr(os, "fork"), "needs fork")
     def test_a_forked_child_sends_from_its_own_thread(self):
         # macOS looks up system proxies through Objective-C, which isn't fork safe; read proxies from the environment.
