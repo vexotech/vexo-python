@@ -59,8 +59,11 @@ class Vexo:
             # sending what it queued before the fork.
             os.register_at_fork(after_in_child=self._reset_state)
 
-    def capture(self, distinct_id, event, properties=None, timestamp=None):
-        """Queue an event. `timestamp` (datetime, ISO 8601 string or epoch ms) defaults to now."""
+    def capture(self, distinct_id, event, properties=None, timestamp=None, message_id=None):
+        """Queue an event. `timestamp` (datetime, ISO 8601 string or epoch ms) defaults to now.
+
+        `message_id` defaults to a random UUID; pass your own (an order ID, say) to dedupe across your own retries.
+        """
         if not distinct_id or not event:
             self.on_error(VexoError("vexo: capture needs a distinct_id and an event"))
             return
@@ -70,7 +73,7 @@ class Vexo:
             "event": str(event),
             "properties": properties or {},
             "timestamp": _timestamp(timestamp),
-        })
+        }, message_id)
 
     def identify(self, distinct_id, traits=None):
         """Queue an identify: merges `traits` into the person with this distinct id."""
@@ -112,11 +115,11 @@ class Vexo:
         if not self._closed:
             self._worker.start()
 
-    def _enqueue(self, message):
+    def _enqueue(self, message, message_id=None):
         if self._closed:
             self.on_error(VexoError("vexo: the client is shut down; message dropped"))
             return
-        message["messageId"] = str(uuid.uuid4())
+        message["messageId"] = str(message_id or uuid.uuid4())
         try:
             # default=str sends Decimal, UUID, date and similar values as strings.
             body = json.dumps(message, default=str, separators=(",", ":"))
@@ -224,7 +227,7 @@ class Vexo:
         })
         timeout = max(0.001, min(self.timeout, self._remaining()))
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8")).get("data") or {}
+            return _response_data(response.read())
 
     def _report(self, batch, results, what):
         if results:
@@ -253,6 +256,15 @@ def _timestamp(timestamp):
     if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
         return int(timestamp)
     return timestamp
+
+
+def _response_data(body):
+    """The envelope's data. A 2xx whose body isn't the envelope still means the API accepted the batch (SPEC W6)."""
+    try:
+        data = json.loads(body.decode("utf-8")).get("data")
+    except (ValueError, AttributeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _backoff(attempt):

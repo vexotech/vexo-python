@@ -27,7 +27,7 @@ class FakeApi:
                 status, headers, payload = api.responses.pop(0) if api.responses else (200, {}, None)
                 if payload is None:
                     payload = {"success": True, "code": 200, "data": {"accepted": len(body["batch"]), "dropped": []}}
-                data = json.dumps(payload).encode()
+                data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
@@ -86,6 +86,22 @@ class VexoTest(unittest.TestCase):
         self.assertIsInstance(first, int)
         self.assertIsInstance(second, int)
         self.assertGreaterEqual(first, before)
+
+    def test_sends_the_callers_message_id_unchanged(self):
+        vexo = self.client()
+        vexo.capture("u", "a", message_id="order-1234-paid")
+        vexo.capture("u", "b")
+        vexo.flush()
+        own, generated = (m["messageId"] for m in self.api.requests[0]["body"]["batch"])
+        self.assertEqual(own, "order-1234-paid")
+        self.assertEqual(len(generated), 36)
+
+    def test_counts_a_2xx_it_cannot_parse_as_accepted(self):
+        vexo = self.client([(200, {}, b"<html>ok</html>")])
+        vexo.capture("u", "a")
+        vexo.flush()
+        self.assertEqual(len(self.api.requests), 1)
+        self.assertEqual(self.errors, [])
 
     def test_flushes_when_the_queue_reaches_flush_at(self):
         vexo = self.client(flush_at=2)
