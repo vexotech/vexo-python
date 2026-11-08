@@ -153,8 +153,10 @@ class Vexo:
             self._wake.set()
 
     def _run(self):
+        # flush_interval 0 turns the timer off: wait until flush_at messages are queued or shutdown() runs.
+        interval = self.flush_interval if self.flush_interval > 0 else None
         while not self._closed:
-            self._wake.wait(self.flush_interval)
+            self._wake.wait(interval)
             self._wake.clear()
             if not self._closed:
                 self.flush()

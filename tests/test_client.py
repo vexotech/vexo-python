@@ -116,6 +116,14 @@ class VexoTest(unittest.TestCase):
         self.client(flush_interval=0.05).capture("u", "a")
         self.wait_for_requests(1)
 
+    def test_flush_interval_0_turns_the_timer_off(self):
+        vexo = self.client(flush_interval=0)
+        vexo.capture("u", "a")
+        time.sleep(0.3)
+        self.assertEqual(self.api.requests, [], "flush_interval=0 sent without flush_at or flush()")
+        vexo.flush()
+        self.assertEqual(len(self.api.requests), 1)
+
     def test_retries_503_and_429_with_the_same_batch(self):
         vexo = self.client([(503, {"Retry-After": "0"}, {"success": False}), (429, {"Retry-After": "0"}, {"success": False})])
         vexo.capture("u", "a")
