@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+from decimal import Decimal
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from vexo import Vexo  # noqa: E402
@@ -46,7 +47,13 @@ def main():
                 properties["poison"] = properties  # a circular reference: json.dumps refuses it
             if step.get("nan"):
                 properties = dict(properties or {}, nan=float("nan"))
-            timestamp = datetime.fromisoformat(step["at"].replace("Z", "+00:00")) if "at" in step else step.get("timestamp")
+            if "dateTime" in step:
+                properties = dict(properties or {}, dateTime=_datetime(step["dateTime"]))
+            if "decimal" in step:
+                properties = dict(properties or {}, decimal=Decimal(step["decimal"]))
+            if step.get("invalidUnicode"):
+                properties = dict(properties or {}, invalidUnicode="ok\ud800")  # a lone surrogate
+            timestamp = _datetime(step["at"]) if "at" in step else step.get("timestamp")
             kwargs = {"message_id": step["messageId"]} if "messageId" in step else {}
             vexo.capture(step["distinctId"], step["event"], properties, timestamp=timestamp, **kwargs)
         elif op == "identify":
@@ -60,6 +67,10 @@ def main():
         elif op == "exit":
             os._exit(0)
         output({"type": "step", "op": op, "ms": (time.monotonic() - start) * 1000})
+
+
+def _datetime(text):
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))  # Python before 3.11 doesn't read Z
 
 
 if __name__ == "__main__":
