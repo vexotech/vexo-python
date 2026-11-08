@@ -1,8 +1,12 @@
 import json
+import os
+import socket
 import threading
 import time
 import unittest
+import warnings
 from datetime import datetime
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from vexo import Vexo
@@ -68,16 +72,20 @@ class VexoTest(unittest.TestCase):
         identify, capture = request["body"]["batch"]
         self.assertEqual((identify["type"], identify["distinctId"], identify["traits"]), ("identify", "user_1", {"plan": "pro"}))
         self.assertEqual((capture["type"], capture["event"], capture["properties"]), ("capture", "purchase", {"amount": 42}))
-        self.assertEqual(capture["timestamp"], "2026-11-07T12:00:00+00:00")
+        self.assertEqual(capture["timestamp"], 1794052800000)
         self.assertNotEqual(identify["messageId"], capture["messageId"])
         self.assertEqual(self.errors, [])
 
-    def test_defaults_the_timestamp_to_now_with_an_offset(self):
+    def test_defaults_the_timestamp_to_now_in_integer_milliseconds(self):
         vexo = self.client()
+        before = int(time.time() * 1000)
         vexo.capture("u", "a")
+        vexo.capture("u", "b", timestamp=time.time() * 1000)
         vexo.flush()
-        timestamp = self.api.requests[0]["body"]["batch"][0]["timestamp"]
-        self.assertIsNotNone(datetime.fromisoformat(timestamp).tzinfo)
+        first, second = (m["timestamp"] for m in self.api.requests[0]["body"]["batch"])
+        self.assertIsInstance(first, int)
+        self.assertIsInstance(second, int)
+        self.assertGreaterEqual(first, before)
 
     def test_flushes_when_the_queue_reaches_flush_at(self):
         vexo = self.client(flush_at=2)
@@ -150,6 +158,84 @@ class VexoTest(unittest.TestCase):
         while len(self.api.requests) < count and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertEqual(len(self.api.requests), count)
+
+    def test_sends_values_json_cannot_encode_as_strings(self):
+        vexo = self.client()
+        vexo.capture("u", "priced", {"amount": Decimal("9.90"), "at": datetime(2026, 1, 2)})
+        vexo.flush()
+        self.assertEqual(self.api.requests[0]["body"]["batch"][0]["properties"], {"amount": "9.90", "at": "2026-01-02 00:00:00"})
+
+    def test_drops_only_the_message_that_cannot_be_serialized(self):
+        vexo = self.client()
+        circular = {}
+        circular["self"] = circular
+        vexo.capture("u", "ok")
+        vexo.capture("u", "circular", circular)
+        vexo.flush()
+
+        self.assertEqual([m["event"] for m in self.api.requests[0]["body"]["batch"]], ["ok"])
+        self.assertEqual(len(self.errors), 1)
+        self.assertIn("JSON", str(self.errors[0]))
+
+    def test_sends_again_only_the_messages_the_server_reports_as_failed(self):
+        failed = {"success": True, "code": 200, "data": {"accepted": 1, "dropped": [], "failed": [{"index": 1, "reason": "retry"}]}}
+        vexo = self.client([(200, {}, failed)])
+        vexo.capture("a", "stored")
+        vexo.capture("b", "failed_once")
+        started = time.monotonic()
+        vexo.flush()
+
+        self.assertEqual(len(self.api.requests), 2)
+        resent = self.api.requests[1]["body"]["batch"]
+        self.assertEqual([m["event"] for m in resent], ["failed_once"])
+        self.assertEqual(resent[0]["messageId"], self.api.requests[0]["body"]["batch"][1]["messageId"])
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(self.errors, [])
+
+    def test_stops_retrying_the_next_batches_once_one_batch_used_up_its_retries(self):
+        vexo = self.client([(500, {"Retry-After": "0"}, {})] * 20, flush_at=1, max_retries=2)
+        for i in range(3):
+            vexo.capture("u", "e%d" % i)
+        vexo.shutdown()
+
+        # 3 attempts for the first batch, then 1 for each of the others.
+        self.assertEqual(len(self.api.requests), 5)
+        self.assertEqual(len(self.errors), 3)
+
+    def test_shutdown_gives_up_at_shutdown_timeout_when_the_api_is_unreachable(self):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        self.errors = []
+        vexo = Vexo("test-key", host="http://127.0.0.1:%d" % port, flush_at=1, flush_interval=60, timeout=0.5,
+                    shutdown_timeout=1, on_error=self.errors.append)
+        for i in range(5):
+            vexo.capture("u", "e%d" % i)
+
+        started = time.monotonic()
+        vexo.shutdown()
+
+        self.assertLess(time.monotonic() - started, 2.5)
+        self.assertTrue(any("deadline" in str(e) for e in self.errors))
+
+    @unittest.skipUnless(hasattr(os, "fork"), "needs fork")
+    def test_a_forked_child_sends_from_its_own_thread(self):
+        # macOS looks up system proxies through Objective-C, which isn't fork safe; read proxies from the environment.
+        os.environ.setdefault("no_proxy", "*")
+        vexo = self.client(flush_at=1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            pid = os.fork()
+        if pid == 0:
+            vexo.capture("child", "from_child")
+            deadline = time.monotonic() + 3
+            while vexo._queue and time.monotonic() < deadline:
+                time.sleep(0.01)
+            time.sleep(0.2)
+            os._exit(0)
+        os.waitpid(pid, 0)
+        self.wait_for_requests(1)
+        self.assertEqual(self.api.requests[0]["body"]["batch"][0]["event"], "from_child")
 
 
 if __name__ == "__main__":
