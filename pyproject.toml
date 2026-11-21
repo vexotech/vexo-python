@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vexo-python"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Send server-side events and identifies to Vexo from Python."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -16,3 +16,6 @@ Documentation = "https://docs.vexo.co/server-side/capture"
 
 [tool.setuptools]
 packages = ["vexo"]
+
+[tool.setuptools.dynamic]
+version = { attr = "vexo.__version__" }
