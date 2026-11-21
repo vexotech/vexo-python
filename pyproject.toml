@@ -1,18 +1,23 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "vexo-python"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Send server-side events and identifies to Vexo from Python."
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
 requires-python = ">=3.8"
 dependencies = []
+keywords = ["vexo", "analytics", "server-side", "events"]
 
 [project.urls]
-Documentation = "https://docs.vexo.co/server-side/capture"
+Homepage = "https://docs.vexo.co/server-side/capture"
+Source = "https://github.com/vexotech/vexo-python"
 
 [tool.setuptools]
 packages = ["vexo"]
+
+[tool.setuptools.dynamic]
+version = { attr = "vexo.__version__" }

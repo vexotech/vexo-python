@@ -1,0 +1,46 @@
+name: release
+
+# Publishes to PyPI when a GitHub release is published, through PyPI trusted publishing (OIDC): the repository holds
+# no PyPI token. The build job tests and builds without an OIDC token; only the publish job can mint one. Actions are
+# pinned to commit SHAs because this workflow publishes.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Check that the tag matches the package version
+        run: |
+          version="$(python -c 'import vexo; print(vexo.__version__)')"
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match the package version $version. Set __version__ in vexo/__init__.py first."
+            exit 1
+          fi
+      - run: python -m unittest
+      - run: python -m pip install build && python -m build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

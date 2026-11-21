@@ -1,0 +1,19 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest supported Python, the newest, and one between. The official images match local Docker runs.
+        python: ["3.8", "3.11", "3.14"]
+    container: python:${{ matrix.python }}-slim
+    steps:
+      - uses: actions/checkout@v5
+      - run: python -m unittest
